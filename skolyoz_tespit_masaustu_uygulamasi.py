@@ -38,26 +38,24 @@ class AnalysisThread(QThread):
             img = cv2.imread(self.image_path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             
-            self.progress_signal.emit(40)
+            self.progress_signal.emit(30)
             
-            # Basitleştirilmiş: Omurga tespiti ve MediaPipe işlevlerini temsil eden dummy fonksiyonlar
-            spine_image = img.copy()  # Gerçek uygulamada detect_spine_in_xray(img) çağrılacak
-            spine_curve = []  # Dummy veri
+            # Gerçek omurga tespiti fonksiyonlarını kullan
+            spine_image, spine_curve = detect_spine_in_xray(img)
             
-            mediapipe_image = img.copy()  # Gerçek uygulamada detect_spine_with_mediapipe(img) çağrılacak
-            spine_points = []  # Dummy veri
+            self.progress_signal.emit(50)
             
-            self.progress_signal.emit(60)
+            mediapipe_image, spine_points = detect_spine_with_mediapipe(img)
             
-            # Basitleştirilmiş Cobb açısı hesaplama
-            cobb_angle = 15.7  # Gerçek uygulamada calculate_cobb_angle(spine_curve) çağrılacak
+            self.progress_signal.emit(70)
+            
+            # Cobb açısı hesaplama
+            cobb_angle = calculate_cobb_angle(spine_curve) if spine_curve is not None and len(spine_curve) > 0 else 0.0
             
             self.progress_signal.emit(80)
             
             # Model için görüntüyü hazırlama
-            model_img = cv2.resize(img, self.img_size)
-            model_img = model_img / 255.0
-            model_img = np.expand_dims(model_img, axis=0)
+            model_img = preprocess_image_for_model(img, self.img_size)
             
             # Sınıflandırma tahmini
             predictions = self.model.predict(model_img)
@@ -70,7 +68,7 @@ class AnalysisThread(QThread):
             results = {
                 'class_name': class_name,
                 'confidence': confidence,
-                'cobb_angle': cobb_angle,
+                'cobb_angle': cobb_angle if cobb_angle else 0.0,
                 'spine_image': spine_image,
                 'mediapipe_image': mediapipe_image,
                 'predictions': predictions[0].tolist()
@@ -80,7 +78,6 @@ class AnalysisThread(QThread):
             
         except Exception as e:
             self.error_signal.emit(str(e))
-
 
 class MatplotlibCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):

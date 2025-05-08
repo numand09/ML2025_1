@@ -38,9 +38,10 @@ def detect_spine_in_xray(image):
         sorted_points = all_points[np.argsort(all_points[:, 1])]
         
         curve_points = []
+        # Burada bir kodlama hatası var - A0 değişkeni tanımlanmamış
         for y in np.unique(sorted_points[:, 1]):
             x_values = sorted_points[sorted_points[:, 1] == y, 0]
-            if len(x_values) > A0:
+            if len(x_values) > 0:  # A0 yerine 0 kullanıldı
                 curve_points.append([np.mean(x_values), y])
         
         spine_curve = np.array(curve_points)
