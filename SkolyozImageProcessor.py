@@ -14,27 +14,73 @@ class SkolyozImageProcessor(BaseImageProcessor):
         return np.expand_dims(self.normalize_image(self.resize_image(image)), axis=0)
 
     def detect_spine_in_xray(self, image):
+        """X-ray görüntüsünde omurgayı tespit eden geliştirilmiş method"""
+        # Görüntüyü gri tonlamaya çevir
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(cv2.GaussianBlur(gray, (5, 5), 0))
-        edges = cv2.Canny(enhanced, 50, 150)
-        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-        contours = sorted(cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0], key=cv2.contourArea, reverse=True)[:5]
-        spine = [c for c in contours if cv2.boundingRect(c)[3]/cv2.boundingRect(c)[2] > 2]
         
+        # Görüntü iyileştirme
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        
+        # Kenar tespiti ve morfolojik işlemler
+        edges = cv2.Canny(blurred, 30, 150)
+        kernel = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=1)
+        
+        # Dikey yapıyı vurgulamak için morfolojik işlem
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15))
+        vertical_edges = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, vertical_kernel)
+        
+        # Omurga merkez çizgisini bulmak için görüntüyü dikey olarak incelt
+        h, w = vertical_edges.shape
+        center_strip = vertical_edges[:, w//3:2*w//3]
+        
+        # Omurga noktalarını bul
+        spine_points = []
+        step = h // 20  # 20 nokta al
+        
+        for y in range(0, h, step):
+            if y + step > h:
+                continue
+            strip = center_strip[y:y+step, :]
+            if np.sum(strip) > 0:  # Bu kesitte omurga var mı?
+                white_pixels = np.where(strip > 0)
+                if len(white_pixels[0]) > 0:
+                    avg_x = int(np.mean(white_pixels[1])) + w//3  # x koordinatını orijinal görüntüye ayarla
+                    avg_y = y + step//2
+                    spine_points.append([avg_x, avg_y])
+        
+        # Omurga noktaları arasında interpolasyon yap
+        if len(spine_points) >= 2:
+            # Yumuşak bir eğri elde etmek için interpolasyon
+            spine_points = np.array(spine_points)
+            # Y'ye göre sırala
+            spine_points = spine_points[spine_points[:, 1].argsort()]
+            
+            # Az sayıda nokta varsa daha fazla nokta ekle
+            if len(spine_points) < 10:
+                y_values = np.linspace(spine_points[0][1], spine_points[-1][1], 20)
+                x_interp = np.interp(y_values, spine_points[:, 1], spine_points[:, 0])
+                spine_points = np.column_stack((x_interp, y_values))
+        else:
+            # Omurga tespit edilemezse MediaPipe ile dene
+            return image.copy(), []
+        
+        # Sonuç görüntüsünü hazırla
         result = image.copy()
-        cv2.drawContours(result, spine, -1, (0, 255, 0), 2)
         
-        if not spine:
-            return result, []
+        # Omurga noktalarını ve eğriyi çiz
+        for point in spine_points:
+            cv2.circle(result, (int(point[0]), int(point[1])), 3, (0, 255, 0), -1)
         
-        points = np.vstack([c.reshape(-1, 2) for c in spine])
-        points = points[np.argsort(points[:, 1])]
-        curve = [[np.mean(points[points[:,1]==y][:,0]), y] for y in np.unique(points[:,1])]
-        for i in range(1, len(curve)):
-            cv2.line(result, tuple(np.int32(curve[i-1])), tuple(np.int32(curve[i])), (255, 0, 0), 2)
-
-        return result, np.array(curve)
+        # Omurga eğrisini çiz
+        for i in range(1, len(spine_points)):
+            p1 = (int(spine_points[i-1][0]), int(spine_points[i-1][1]))
+            p2 = (int(spine_points[i][0]), int(spine_points[i][1]))
+            cv2.line(result, p1, p2, (255, 0, 0), 2)
+        
+        return result, spine_points
 
     def detect_spine_with_mediapipe(self, image):
         img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.shape[2] == 3 else image
